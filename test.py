@@ -76,43 +76,6 @@ def make_directory(directory):
     if not os.path.exists(directory):
         os.makedirs(directory)
 
-# Function to count white pixels in rows and columns and save the results
-def white_pixels_count(binary_image, filename):
-    row_directory = 'row'
-    col_directory = 'col'
-    make_directory(row_directory)
-    make_directory(col_directory)
-
-    # Count the number of white pixels in each row
-    row_counts = np.sum(binary_image == 255, axis=1)
-
-    # Count the number of white pixels in each column
-    column_counts = np.sum(binary_image == 255, axis=0)
-
-    # Save the result images
-    row_output_path = os.path.join(row_directory, filename)  # Save path for row counts
-    column_output_path = os.path.join(col_directory, filename)  # Save path for column counts
-
-    # Plot row-wise white pixel counts
-    plt.figure(figsize=(10, 4))
-    plt.plot(row_counts, color='blue')
-    plt.title('Row-wise White Pixel Counts')
-    plt.xlabel('Row Index')
-    plt.ylabel('White Pixel Count')
-    plt.grid()
-    plt.savefig(row_output_path)
-    plt.show()
-
-    # Plot column-wise white pixel counts
-    plt.figure(figsize=(10, 4))
-    plt.plot(column_counts, color='green')
-    plt.title('Column-wise White Pixel Counts')
-    plt.xlabel('Column Index')
-    plt.ylabel('White Pixel Count')
-    plt.grid()
-    plt.savefig(column_output_path)
-    plt.show()
-
 # Function to load an image and convert it to binary format
 def load_image(image_path):
   # Load the image in grayscale mode
@@ -132,8 +95,6 @@ def remove_noise(binary_image):
         
     # Closing operation (dilation followed by erosion) to close small holes inside objects
     cleaned_image = cv2.morphologyEx(cleaned_image, cv2.MORPH_CLOSE, kernel, iterations=2)
-
-    cv2.imwrite(os.path.join('a.jpg'), cleaned_image)
 
     return cleaned_image
 
@@ -286,7 +247,7 @@ def detect_tail_middle(image, position):
     segment_width = abs(rightmost[0] - leftmost[0]) // 10  # Divide into 10 segments
     tail_segment = None
     segment_area_min = float('inf')
-
+   
     for i in range(8):  # We will have 10 segments to analyze
         if position == 'left':
             x1 = rightmost[0] - (i + 1) * segment_width
@@ -299,15 +260,20 @@ def detect_tail_middle(image, position):
             
         # Find contours in the segment
         segment_contours, _ = cv2.findContours(segment, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        # Assume the largest contour is the fish
-        segment_contour = max(segment_contours, key=cv2.contourArea)
-        segment_area = cv2.contourArea(segment_contour)
+        
+        if segment_contours:
+            # Assume the largest contour is the fish
+            segment_contour = max(segment_contours, key=cv2.contourArea)
+            segment_area = cv2.contourArea(segment_contour)
 
-        if segment_area < segment_area_min:
-            segment_area_min = segment_area
-            tail_segment = (min(x1, x2), max(x1, x2))
+            if segment_area < segment_area_min:
+                segment_area_min = segment_area
+                tail_segment = (min(x1, x2), max(x1, x2))
 
-    tail_x_coord = (tail_segment[0] + tail_segment[1]) // 2
+    if tail_segment is not None:
+        tail_x_coord = (tail_segment[0] + tail_segment[1]) // 2
+    else:
+        tail_x_coord = (leftmost[0] + rightmost[0]) // 2
     tail_coords = find_y_coordinates(contour, tail_x_coord)
     tail_x_coord = int((tail_coords[0][0] + tail_coords[1][0]) / len(tail_coords))
     tail_y_coord = int((tail_coords[0][1] + tail_coords[1][1]) / len(tail_coords))
@@ -361,29 +327,11 @@ def detect_top_fin(image, position):
             # Decrement the threshold value
             threshold_value -= 1
     
-
     # Get the start point of the top fin
     start_point_of_top_fin = tuple(contour[index][0])
 
     if position == 'left':
         start_point_of_top_fin = (image.shape[1] - start_point_of_top_fin[0], start_point_of_top_fin[1])
-
-    # Create a plot with increased figure size
-    # plt.figure(figsize=(10, 6))
-    # plt.plot(x_coords, y_coords, marker='o', linestyle='-')
-    # plt.title('X vs Y with Y-axis Flipped and More Axis Space')
-    # plt.xlabel('X values')
-    # plt.ylabel('Y values')
-    # plt.grid(True)
-
-    # # Adjust the subplot parameters to give more space on the x and y axes
-    # plt.subplots_adjust(left=0.15, right=0.85, top=0.85, bottom=0.15)
-
-    # # Flip the y-axis
-    # plt.gca().invert_yaxis()
-
-    # Display the plot
-    # plt.show()
 
     return start_point_of_top_fin
 
@@ -416,8 +364,13 @@ def get_line_equation(p1, p2):
     """Calculate the slope (m) and y-intercept (b) of the line passing through points p1 and p2."""
     x1, y1 = p1
     x2, y2 = p2
-    m = (y2 - y1) / (x2 - x1)
-    b = y1 - m * x1
+
+    if x1 != x2:
+        m = (y2 - y1) / (x2 - x1)
+        b = y1 - m * x1
+    else:
+        m = float('inf')
+        b = y1
 
     return m, b
 
@@ -429,9 +382,11 @@ def get_perpendicular_line(p, line_eq):
         m2 = -1 / m1
         b2 = p[1] - m2 * p[0]
         return m2, b2
-    else:
+    elif m1 == 0:
         # Vertical line through point p
         return float('inf'), p[0]
+    else:
+        return float('inf'), 0
 
 # Function to find the intersections of a line with the contour
 def find_intersections(contour, line_parms):
@@ -464,7 +419,7 @@ def find_intersections(contour, line_parms):
             # Line equation at endpoints
             y_line1 = line_parms[0] * x1 + line_parms[1]
             y_line2 = line_parms[0] * x2 + line_parms[1]
-
+            
             # Check if segment crosses the line
             if (y1 >= y_line1 and y2 <= y_line2) or (y1 <= y_line1 and y2 >= y_line2):
                 # Calculate the intersection
@@ -474,6 +429,8 @@ def find_intersections(contour, line_parms):
                     x = (line_parms[1] - c) / (m - line_parms[0])
                     y = line_parms[0] * x + line_parms[1]
                     intersections.append((int(x), int(y)))
+                else:
+                    intersections.append((x1, y1))
     
     return intersections
 
@@ -484,7 +441,6 @@ if __name__ == "__main__":
     for i in range(len(images)):
         filename = images[i]
         
-        # filename = 'mask27824.jpg'
         print(filename)
         if filename.endswith('.png') or filename.endswith('.jpg'):
             # Example usage
@@ -502,8 +458,6 @@ if __name__ == "__main__":
             cleaned_image = remove_noise(binary_image)
 
             if predicted_class == 'fully visible':
-                cv2.imwrite(os.path.join(output_dir, filename), binary_image)
-
                 rotated_image = horizontal_state_tuning(cleaned_image)
                 image = rotated_image.copy()
                 
@@ -519,7 +473,7 @@ if __name__ == "__main__":
                 cv2.circle(cleaned_image, (original_nose_point[0], original_nose_point[1]), 3, (0, 0, 255), -1)
                 cv2.circle(cleaned_image, (original_tail_point[0], original_tail_point[1]), 3, (255, 0, 0), -1)
                 cv2.line(cleaned_image, original_nose_point, original_tail_point, (255, 0, 255), 2)
-
+                
                 # Get the line equation connecting the nose and tail
                 line_eq = get_line_equation(original_nose_point, original_tail_point)
 
@@ -529,52 +483,22 @@ if __name__ == "__main__":
                 # Find the intersection of the perpendicular line with the contour
                 intersections = find_intersections(contour, perp_line_eq)
 
-                # print(f"original_nose_point: {original_nose_point}")
-                # print(f"original_tail_point: {original_tail_point}")
-                # print(f"original_top_fin_point: {original_top_fin_point}")
-                # print(intersections)
-                # Plotting with Matplotlib
-                # plt.figure(figsize=(10, 10))
-                # plt.imshow(cleaned_image)
-                
-                # Draw circles
-                # plt.scatter(*original_nose_point, color='red', s=20, label='Nose Point')
-                # plt.scatter(*original_tail_point, color='blue', s=20, label='Tail Point')
-                
-                # Draw line connecting nose and tail
-                # plt.plot([original_nose_point[0], original_tail_point[0]], [original_nose_point[1], original_tail_point[1]], 'm-', linewidth=2, label='Nose to Tail')
-                
-                # Draw the vertical line from the top fin to the intersection point
-                # if intersections:
-                #     plt.plot([intersections[0][0], intersections[1][0]], [intersections[0][1], intersections[1][1]], 'y-', linewidth=2, label='Top Fin to Intersection')
-                #     if intersections[0][1] > intersections[1][1]:
-                #         plt.scatter(*intersections[1], color='green', s=20, label='Top Fin Point')
-                #         plt.scatter(*intersections[0], color='orange', s=20, label='Intersection Point')
-                #     else:
-                #         plt.scatter(*intersections[0], color='green', s=20, label='Top Fin Point')
-                #         plt.scatter(*intersections[1], color='orange', s=20, label='Intersection Point')
-
-                # plt.legend()
-                # plt.title(f'Predicted Class: {predicted_class + filename}')
-                # plt.axis('off')
-                # plt.show()
-
                 # Draw the vertical line from the known point to the intersection point on the second line
-                if intersections:
-                    if intersections.__len__() > 1:
-                        cv2.circle(cleaned_image, (intersections[0][0], intersections[0][1]), 3, (0, 255, 0), -1)
-                        cv2.circle(cleaned_image, (intersections[1][0], intersections[1][1]), 3, (0, 255, 0), -1)
-                        cv2.line(cleaned_image, intersections[0], intersections[1], (0, 255, 255), 2)
-                    else:
-                        cv2.circle(cleaned_image, original_top_fin_point, 3, (0, 255, 0), -1)
-                        cv2.circle(cleaned_image, intersections[0], 3, (0, 255, 0), -1)
-                        cv2.line(cleaned_image, intersections[0], original_top_fin_point, (0, 255, 255), 2) 
-                           
+                if intersections.__len__() > 1:
+                    cv2.circle(cleaned_image, (intersections[0][0], intersections[0][1]), 3, (0, 255, 0), -1)
+                    cv2.circle(cleaned_image, (intersections[1][0], intersections[1][1]), 3, (0, 255, 0), -1)
+                    cv2.line(cleaned_image, intersections[0], intersections[1], (0, 255, 255), 2)
+                else:
+                    cv2.circle(cleaned_image, original_top_fin_point, 3, (0, 255, 0), -1)
+                    cv2.circle(cleaned_image, intersections[0], 3, (0, 255, 0), -1)
+                    cv2.line(cleaned_image, intersections[0], original_top_fin_point, (0, 255, 255), 2)
+
+                cv2.imwrite(os.path.join(output_dir, filename), cleaned_image)
+
             cv2.putText(cleaned_image, predicted_class, (0, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 1, cv2.LINE_AA)
             cv2.imshow(filename, cleaned_image)
 
-            # white_pixels_count(binary_image, filename)
-
+            # while True:
             c = cv2.waitKey(1)
             if c == 27:
                 break
