@@ -8,6 +8,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import numpy as np
 import time
+import math
 
 # Define directories
 base_dir = 'mask'
@@ -157,9 +158,8 @@ def get_original_point(image, point):
     return point_original
 
 # Function to detect key points (nose, tail, top fin) on the fish
-def detect_key_point(image):
+def detect_key_point(image, path):
     contours = detect_contours(image)
-    # Assume the largest contour is the fish
     contour = max(contours, key=cv2.contourArea)
         
     # Find extreme points
@@ -167,76 +167,54 @@ def detect_key_point(image):
     rightmost = tuple(contour[contour[:, :, 0].argmax()][0])
 
     # Divide the fish into segments
-    segment_width = abs(rightmost[0] - leftmost[0]) // 10  # Divide into 10 segments
-    tail_segment = None
-    tail_position = 'left'
-    segment_area_min = float('inf')
+    segment_width = math.ceil((rightmost[0] - leftmost[0]) / 10) * 3  # Divide into 10 segments
+    segment_image = image.copy()
+    segment_image[0:segment_image.shape[0], leftmost[0] + segment_width:segment_image.shape[1]] = 0
+
+    segment_width1 = segment_width // 10  # Divide into 10 segments
+    tail_position = 'right'
+    segment_area = []
     segment_id = 0
+    for i in range(9):
+        x1 = leftmost[0] + i * segment_width1
+        x2 = x1 + segment_width1
 
-    for i in range(1, 9):  # Analyze 9 segments
-        x1 = leftmost[0] + i * segment_width
-        x2 = x1 + segment_width
-
-        segment = image[:, min(x1, x2):max(x1, x2)]
+        segment = segment_image[:, min(x1, x2):max(x1, x2)]
             
-        # Find contours in the segment
         segment_contours, _ = cv2.findContours(segment, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        # Assume the largest contour is the fish
-        segment_contour = max(segment_contours, key=cv2.contourArea)
-        segment_area = cv2.contourArea(segment_contour)
-        if segment_area < segment_area_min:
-            segment_area_min = segment_area
-            segment_id = i
-            tail_segment = (min(x1, x2), max(x1, x2)) 
+        if segment_contours:
+            segment_contour = max(segment_contours, key=cv2.contourArea)
+            segment_area.append(cv2.contourArea(segment_contour))
+        else:
+            segment_area.append(0)
 
-    head_image = image.copy()
+    segment_area_min = segment_area[0]
+    for i in range(len(segment_area) - 1):
+        if segment_area[1] - segment_area[0] > 100 and i == 0:
+            segment_area_min = segment_area[1]
+            continue
+        if segment_area_min > segment_area[i+1]:
+            segment_id = i + 1
+
     body_image = image.copy()
     tail_image = image.copy()
-
-    if tail_segment:
-        if segment_id < 5:
-            head_image[0:head_image.shape[0], 0:leftmost[0] + segment_width * 8] = 0
-            body_image[0:body_image.shape[0], 0:leftmost[0] + segment_width * 4] = 0
-            body_image[0:body_image.shape[0], leftmost[0] + segment_width * 8:body_image.shape[1]] = 0
-            tail_image[0:tail_image.shape[0], tail_segment[1]:tail_image.shape[1]] = 0
-        else:
-            head_image[0:head_image.shape[0], leftmost[0] + segment_width * 2:head_image.shape[1]] = 0
-            body_image[0:body_image.shape[0], 0:leftmost[0] + segment_width * 2] = 0
-            body_image[0:body_image.shape[0], leftmost[0] + segment_width * 6:body_image.shape[1]] = 0
-            tail_image[0:tail_image.shape[0], 0:tail_segment[0]] = 0
-            tail_position = 'right'
-            
-    nose_point = detect_nose(head_image, tail_position)
-    tail_point = detect_tail_middle(tail_image, tail_position)
-    top_fin_point = detect_top_fin(body_image, tail_position)
-
-    return tail_point, nose_point, top_fin_point
-
-# Function to detect the nose of the fish
-def detect_nose(image, position):
-    contours = detect_contours(image)
-
-    # Assume the largest contour is the fish
-    contour = max(contours, key=cv2.contourArea)
-        
-    # Find extreme points
-    leftmost = tuple(contour[contour[:, :, 0].argmin()][0])
-    rightmost = tuple(contour[contour[:, :, 0].argmax()][0])
-
-    if position == 'left':
-        nose_x_coord = rightmost[0]
+    width = math.ceil((rightmost[0] - leftmost[0]) / 10)
+    if segment_id != 0:
+        tail_position = 'left'
+        body_image[0:body_image.shape[0], 0:leftmost[0] + width * 3] = 0
+        tail_image[0:tail_image.shape[0], leftmost[0] + width * 4:tail_image.shape[1]] = 0
     else:
-        nose_x_coord = leftmost[0]
+        body_image[0:body_image.shape[0], leftmost[0] + width * 7:tail_image.shape[1]] = 0
+        tail_image[0:tail_image.shape[0], 0:leftmost[0] + width * 6] = 0
 
-    nose_coords = find_y_coordinates(contour, nose_x_coord)
+    nose_point, top_fin_point = detect_nose_and_top_fin(body_image, tail_position)
+    tail_point = detect_tail_middle(tail_image, tail_position)
 
-    return (nose_coords[0][0], nose_coords[0][1])
+    return nose_point, top_fin_point, tail_point
 
 # Function to detect the middle of the tail
 def detect_tail_middle(image, position):
     contours = detect_contours(image)
-
-    # Assume the largest contour is the fish
     contour = max(contours, key=cv2.contourArea)
         
     # Find extreme points
@@ -244,7 +222,7 @@ def detect_tail_middle(image, position):
     rightmost = tuple(contour[contour[:, :, 0].argmax()][0])
 
     # Divide the fish into segments
-    segment_width = abs(rightmost[0] - leftmost[0]) // 10  # Divide into 10 segments
+    segment_width = (rightmost[0] - leftmost[0]) // 10  # Divide into 10 segments
     tail_segment = None
     segment_area_min = float('inf')
    
@@ -257,15 +235,10 @@ def detect_tail_middle(image, position):
             x2 = x1 + segment_width
 
         segment = image[:, min(x1, x2):max(x1, x2)]
-            
-        # Find contours in the segment
         segment_contours, _ = cv2.findContours(segment, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
         if segment_contours:
-            # Assume the largest contour is the fish
             segment_contour = max(segment_contours, key=cv2.contourArea)
             segment_area = cv2.contourArea(segment_contour)
-
             if segment_area < segment_area_min:
                 segment_area_min = segment_area
                 tail_segment = (min(x1, x2), max(x1, x2))
@@ -274,30 +247,31 @@ def detect_tail_middle(image, position):
         tail_x_coord = (tail_segment[0] + tail_segment[1]) // 2
     else:
         tail_x_coord = (leftmost[0] + rightmost[0]) // 2
-    tail_coords = find_y_coordinates(contour, tail_x_coord)
-    tail_x_coord = int((tail_coords[0][0] + tail_coords[1][0]) / len(tail_coords))
+
+    line_eq = (float('inf'), tail_x_coord)
+    tail_coords = find_intersections(contour, line_eq)
     tail_y_coord = int((tail_coords[0][1] + tail_coords[1][1]) / len(tail_coords))
     
     return (tail_x_coord, tail_y_coord)
 
 # Function to detect the start point of the top fin
-def detect_top_fin(image, position):
-    contours = detect_contours(image)
-
-    # Assume the largest contour is the fish
-    contour = max(contours, key=cv2.contourArea)
-
+def detect_nose_and_top_fin(image, position):
     if position ==  'left':
         image = cv2.flip(image, 1)
-        contours = detect_contours(image)
-
-        # Assume the largest contour is the fish
-        contour = max(contours, key=cv2.contourArea)
+    
+    contours = detect_contours(image)
+    contour = max(contours, key=cv2.contourArea)
+        
+    # Find extreme points
+    leftmost = tuple(contour[contour[:, :, 0].argmin()][0])
+  
+    nose_x_coord = leftmost[0]
+    nose_point = find_y_coordinates(contour, nose_x_coord)[0]
     
     # Compute differences with step size of 5
     start = 0
     step = 1
-    half_len = contour.shape[0] // 2
+    half_len = contour.shape[0] // 4
 
     # Select elements with the specified step size
     x_coords = contour[start:half_len:step, 0, 0]
@@ -315,10 +289,10 @@ def detect_top_fin(image, position):
     while threshold_value >= 0 and index is None:
         # Find the indices where x is greater than the threshold value and y is 0
         indices = [i for i, (x_val, y_val) in enumerate(zip(dx, dy)) if abs(x_val) >= threshold_value and y_val == 0]
-        
+
         # Further filter these indices to only include those greater than 9
         filtered_indices = [i for i in indices if i > 9]
-        
+
         if filtered_indices:
             index = filtered_indices[0]
         elif indices:
@@ -326,21 +300,22 @@ def detect_top_fin(image, position):
         else:
             # Decrement the threshold value
             threshold_value -= 1
-    
+
     # Get the start point of the top fin
     start_point_of_top_fin = tuple(contour[index][0])
 
     if position == 'left':
+        nose_point = (image.shape[1] - nose_point[0], nose_point[1])
         start_point_of_top_fin = (image.shape[1] - start_point_of_top_fin[0], start_point_of_top_fin[1])
 
-    return start_point_of_top_fin
+    return nose_point, start_point_of_top_fin
 
 # Function to find y-coordinates corresponding to an x-coordinate in the contour
 def find_y_coordinates(contour, x_coord):
     y_coords = []
     x_coords = []
     for point in contour:
-        if x_coord - 7 <= point[0][0] <= x_coord + 7:
+        if x_coord - 3 <= point[0][0] <= x_coord + 3:
             y_coords.append(point[0][1])
             x_coords.append(point[0][0])
 
@@ -419,7 +394,7 @@ def find_intersections(contour, line_parms):
             # Line equation at endpoints
             y_line1 = line_parms[0] * x1 + line_parms[1]
             y_line2 = line_parms[0] * x2 + line_parms[1]
-            
+
             # Check if segment crosses the line
             if (y1 >= y_line1 and y2 <= y_line2) or (y1 <= y_line1 and y2 >= y_line2):
                 # Calculate the intersection
@@ -432,7 +407,15 @@ def find_intersections(contour, line_parms):
                 else:
                     intersections.append((x1, y1))
     
-    return intersections
+    if not intersections:
+        return []
+    y_values = [point[1] for point in intersections]
+    min_y = min(y_values)
+    max_y = max(y_values)
+    min_y_point = [point for point in intersections if point[1] == min_y][0]
+    max_y_point = [point for point in intersections if point[1] == max_y][0]
+    
+    return min_y_point, max_y_point
 
 if __name__ == "__main__":
     make_directory(output_dir)
@@ -440,7 +423,6 @@ if __name__ == "__main__":
     images = os.listdir(base_dir)
     for i in range(len(images)):
         filename = images[i]
-        
         print(filename)
         if filename.endswith('.png') or filename.endswith('.jpg'):
             # Example usage
@@ -461,16 +443,16 @@ if __name__ == "__main__":
                 rotated_image = horizontal_state_tuning(cleaned_image)
                 image = rotated_image.copy()
                 
-                tail_point, nose_point, top_fin_point = detect_key_point(rotated_image)
+                nose_point, top_fin_point, tail_point = detect_key_point(rotated_image, image_path)
                 original_nose_point = get_original_point(cleaned_image, nose_point)
-                original_tail_point = get_original_point(cleaned_image, tail_point)
                 original_top_fin_point = get_original_point(cleaned_image, top_fin_point)
+                original_tail_point = get_original_point(cleaned_image, tail_point)
                 
                 contours = detect_contours(cleaned_image)
                 contour = max(contours, key=cv2.contourArea)
 
                 cleaned_image = cv2.cvtColor(cleaned_image, cv2.COLOR_GRAY2BGR)
-                cv2.circle(cleaned_image, (original_nose_point[0], original_nose_point[1]), 3, (0, 0, 255), -1)
+                cv2.circle(cleaned_image, original_nose_point, 3, (0, 0, 255), -1)
                 cv2.circle(cleaned_image, (original_tail_point[0], original_tail_point[1]), 3, (255, 0, 0), -1)
                 cv2.line(cleaned_image, original_nose_point, original_tail_point, (255, 0, 255), 2)
                 
@@ -484,21 +466,20 @@ if __name__ == "__main__":
                 intersections = find_intersections(contour, perp_line_eq)
 
                 # Draw the vertical line from the known point to the intersection point on the second line
-                if intersections.__len__() > 1:
-                    cv2.circle(cleaned_image, (intersections[0][0], intersections[0][1]), 3, (0, 255, 0), -1)
-                    cv2.circle(cleaned_image, (intersections[1][0], intersections[1][1]), 3, (0, 255, 0), -1)
-                    cv2.line(cleaned_image, intersections[0], intersections[1], (0, 255, 255), 2)
-                else:
-                    cv2.circle(cleaned_image, original_top_fin_point, 3, (0, 255, 0), -1)
-                    cv2.circle(cleaned_image, intersections[0], 3, (0, 255, 0), -1)
-                    cv2.line(cleaned_image, intersections[0], original_top_fin_point, (0, 255, 255), 2)
+                if intersections:
+                    if intersections.__len__() > 1:
+                        cv2.circle(cleaned_image, (intersections[0][0], intersections[0][1]), 3, (0, 255, 0), -1)
+                        cv2.circle(cleaned_image, (intersections[1][0], intersections[1][1]), 3, (0, 255, 0), -1)
+                        cv2.line(cleaned_image, intersections[0], intersections[1], (0, 255, 255), 2)
+                    else:
+                        cv2.circle(cleaned_image, original_top_fin_point, 3, (0, 255, 0), -1)
+                        cv2.circle(cleaned_image, intersections[0], 3, (0, 255, 0), -1)
+                        cv2.line(cleaned_image, intersections[0], original_top_fin_point, (0, 255, 255), 2)
 
-                cv2.imwrite(os.path.join(output_dir, filename), cleaned_image)
-
+                cv2.imwrite(os.path.join(output_dir, filename), cleaned_image)         
             cv2.putText(cleaned_image, predicted_class, (0, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 1, cv2.LINE_AA)
             cv2.imshow(filename, cleaned_image)
 
-            # while True:
             c = cv2.waitKey(1)
             if c == 27:
                 break
