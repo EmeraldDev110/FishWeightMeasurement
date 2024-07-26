@@ -167,34 +167,31 @@ def detect_key_point(image, path):
     rightmost = tuple(contour[contour[:, :, 0].argmax()][0])
 
     # Divide the fish into segments
-    segment_width = math.ceil((rightmost[0] - leftmost[0]) / 10) * 3  # Divide into 10 segments
+    segment_width = math.ceil((rightmost[0] - leftmost[0]) / 10 * 4)  # Divide into 10 segments
     segment_image = image.copy()
     segment_image[0:segment_image.shape[0], leftmost[0] + segment_width:segment_image.shape[1]] = 0
 
-    segment_width1 = segment_width // 10  # Divide into 10 segments
+    segment_width1 = math.ceil(segment_width / 10)  # Divide into 10 segments
     tail_position = 'right'
     segment_area = []
     segment_id = 0
-    for i in range(9):
-        x1 = leftmost[0] + i * segment_width1
+    for i in range(10):
+        x1 = leftmost[0] + segment_width - (i + 1) * segment_width1
         x2 = x1 + segment_width1
 
         segment = segment_image[:, min(x1, x2):max(x1, x2)]
-            
         segment_contours, _ = cv2.findContours(segment, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if segment_contours:
             segment_contour = max(segment_contours, key=cv2.contourArea)
             segment_area.append(cv2.contourArea(segment_contour))
         else:
             segment_area.append(0)
+        
+    segment_area.reverse()
 
-    segment_area_min = segment_area[0]
-    for i in range(len(segment_area) - 1):
-        if segment_area[1] - segment_area[0] > 100 and i == 0:
-            segment_area_min = segment_area[1]
-            continue
-        if segment_area_min > segment_area[i+1]:
-            segment_id = i + 1
+    index = find_inflection_point(segment_area)
+    if index != -1:
+        segment_id = index
 
     body_image = image.copy()
     tail_image = image.copy()
@@ -271,7 +268,7 @@ def detect_nose_and_top_fin(image, position):
     # Compute differences with step size of 5
     start = 0
     step = 1
-    half_len = contour.shape[0] // 4
+    half_len = contour.shape[0] // 3
 
     # Select elements with the specified step size
     x_coords = contour[start:half_len:step, 0, 0]
@@ -417,6 +414,16 @@ def find_intersections(contour, line_parms):
     
     return min_y_point, max_y_point
 
+def find_inflection_point(prices):
+    increase_count = 0
+    
+    for i in range(2, len(prices) - 2):
+        if prices[i - 2] - 2 >= prices[i-1] >= prices[i] and prices[i - 1] >= prices[i] < prices[i + 1]:
+            increase_count += 1
+            return i
+
+    return -1  # Return -1 if no such index is found
+
 if __name__ == "__main__":
     make_directory(output_dir)
     
@@ -455,7 +462,7 @@ if __name__ == "__main__":
                 cv2.circle(cleaned_image, original_nose_point, 3, (0, 0, 255), -1)
                 cv2.circle(cleaned_image, (original_tail_point[0], original_tail_point[1]), 3, (255, 0, 0), -1)
                 cv2.line(cleaned_image, original_nose_point, original_tail_point, (255, 0, 255), 2)
-                
+
                 # Get the line equation connecting the nose and tail
                 line_eq = get_line_equation(original_nose_point, original_tail_point)
 
@@ -477,8 +484,8 @@ if __name__ == "__main__":
                         cv2.line(cleaned_image, intersections[0], original_top_fin_point, (0, 255, 255), 2)
 
                 cv2.imwrite(os.path.join(output_dir, filename), cleaned_image)         
-            cv2.putText(cleaned_image, predicted_class, (0, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 1, cv2.LINE_AA)
-            cv2.imshow(filename, cleaned_image)
+            # cv2.putText(cleaned_image, predicted_class, (0, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 1, cv2.LINE_AA)
+            # cv2.imshow(filename, cleaned_image)
 
             c = cv2.waitKey(1)
             if c == 27:
