@@ -26,24 +26,22 @@ class ImageClassifier(nn.Module):
         self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
         self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-        self.conv4 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)
         self.dropout = nn.Dropout(0.5)
-        self.fc1 = nn.Linear(256 * 16 * 16, 512)
+        self.fc1 = nn.Linear(128 * 16 * 16, 512)
         self.fc2 = nn.Linear(512, 2)  # 2 classes: fully visible or partially visible
 
     def forward(self, x):
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
         x = self.pool(F.relu(self.conv3(x)))
-        x = self.pool(F.relu(self.conv4(x)))
-        x = x.view(-1, 256 * 16 * 16)
+        x = x.view(-1, 128 * 16 * 16)
         x = self.dropout(F.relu(self.fc1(x)))
         x = self.fc2(x)
         return x
 
 # Model, loss function, optimizer
-# model_path = 'model.pth'
+# model_path = 'model_bounding.pth'
 model = ImageClassifier().to(device)
 # model.load_state_dict(torch.load(model_path))
 criterion = nn.CrossEntropyLoss()
@@ -74,11 +72,20 @@ def remove_noise(binary_image):
     return cleaned_image
 
 # Function to extract ROI with padding
-def extract_roi_with_padding(image):
+def extract_roi_with_padding(image, padding=20):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
     binary = remove_noise(binary)
-    
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if contours:
+        largest_contour = max(contours, key=cv2.contourArea)
+        x, y, w, h = cv2.boundingRect(largest_contour)
+        x = max(0, x - padding)
+        y = max(0, y - padding)
+        w = min(image.shape[1] - x, w + 2 * padding)
+        h = min(image.shape[0] - y, h + 2 * padding)
+        roi = image[y:y+h, x:x+w]
+        return roi
     return image  # Return the original image if no contours are found
 
 # Custom dataset class to preprocess images with bounding box extraction
@@ -104,7 +111,7 @@ class CustomROIDataset(Dataset):
     def __getitem__(self, idx):
         img_name = self.image_files[idx]
         image = cv2.imread(img_name)
-        roi = extract_roi_with_padding(image)
+        roi = extract_roi_with_padding(image, padding=20)
         roi_pil = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
         label = self.labels[idx]
         if self.transform:
@@ -117,7 +124,7 @@ print(f"Training files: {sum([len(files) for r, d, files in os.walk(train_dir)])
 
 # Define data augmentation transformations
 data_augmentation_transforms = transforms.Compose([
-    transforms.Resize((256, 256)),
+    transforms.Resize((128, 128)),
     transforms.RandomHorizontalFlip(),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
@@ -125,7 +132,7 @@ data_augmentation_transforms = transforms.Compose([
 
 # Define validation transformations
 validation_transforms = transforms.Compose([
-    transforms.Resize((256, 256)),
+    transforms.Resize((128, 128)),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
@@ -172,6 +179,6 @@ for epoch in range(num_epochs):
     print(f"Validation Loss: {val_loss/len(val_loader)}")
 
     # Save the model
-    model_path = 'model' + str(epoch) + '.pth'
+    model_path = 'model_bounding' + str(epoch) + '.pth'
     torch.save(model.state_dict(), model_path)
     print(f'Model saved to {model_path}')

@@ -27,42 +27,55 @@ class ImageClassifier(nn.Module):
     self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
     self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
     self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-    self.conv4 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
     self.pool = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)
     self.dropout = nn.Dropout(0.5)
-    self.fc1 = nn.Linear(256 * 16 * 16, 512)
+    self.fc1 = nn.Linear(128 * 16 * 16, 512)
     self.fc2 = nn.Linear(512, 2) # 2 classes: fully visible or partially visible
 
   def forward(self, x):
     x = self.pool(F.relu(self.conv1(x)))
     x = self.pool(F.relu(self.conv2(x)))
     x = self.pool(F.relu(self.conv3(x)))
-    x = self.pool(F.relu(self.conv4(x)))
-    x = x.view(-1, 256 * 16 * 16) # Adjusted size after pooling
+    x = x.view(-1, 128 * 16 * 16) # Adjusted size after pooling
     x = self.dropout(F.relu(self.fc1(x)))
     x = self.fc2(x)
     return x
 
 # Load the saved model parameters
-model_path = 'D:/mywork/fish detect/final/model.pth'
+model_path = 'D:/mywork/fish detect/final/model_bounding.pth'
 model = ImageClassifier().to(device)
 model.load_state_dict(torch.load(model_path))
 model.eval()  # Set the model to evaluation mode
 
 # Define the transformation
 transform = transforms.Compose([
-    transforms.Resize((256, 256)),
+    transforms.Resize((128, 128)),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
 
 # Function to preprocess the image
-def preprocess_image(image_path):
+def preprocess_image(image_path, padding=20):
     image = cv2.imread(image_path)
-    image = Image.fromarray(image)  # Convert NumPy array to PIL image
-    image = transform(image)
-    image = image.unsqueeze(0)  # Add batch dimension
-    return image.to(device)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+    binary = remove_noise(binary)
+    contours = detect_contours(binary)
+    if contours:
+        largest_contour = max(contours, key=cv2.contourArea)
+        x, y, w, h = cv2.boundingRect(largest_contour)
+        x = max(0, x - padding)
+        y = max(0, y - padding)
+        w = min(image.shape[1] - x, w + 2 * padding)
+        h = min(image.shape[0] - y, h + 2 * padding)
+        roi = image[y:y+h, x:x+w]
+    else:
+        roi = image
+    
+    roi = Image.fromarray(roi)  # Convert NumPy array to PIL image
+    roi = transform(roi)
+    roi = roi.unsqueeze(0)  # Add batch dimension
+    return roi.to(device)
 
 # Function to predict the class of an image
 def predict_image(image_path, model, class_names):
