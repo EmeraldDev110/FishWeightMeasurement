@@ -12,7 +12,7 @@ import numpy as np
 from PIL import Image
 
 # Define directories
-base_dir = 'images'
+base_dir = 'D:/mywork/fish_detect/images'
 train_dir = os.path.join(base_dir, 'train')
 validation_dir = os.path.join(base_dir, 'validation')
 
@@ -25,7 +25,8 @@ class ImageClassifier(nn.Module):
         super(ImageClassifier, self).__init__()
         self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv2d(64, 96, kernel_size=3, padding=1)
+        self.conv4 = nn.Conv2d(96, 128, kernel_size=3, padding=1)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)
         self.dropout = nn.Dropout(0.5)
         self.fc1 = nn.Linear(128 * 16 * 16, 512)
@@ -35,17 +36,22 @@ class ImageClassifier(nn.Module):
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
         x = self.pool(F.relu(self.conv3(x)))
+        x = self.pool(F.relu(self.conv4(x)))
         x = x.view(-1, 128 * 16 * 16)
         x = self.dropout(F.relu(self.fc1(x)))
         x = self.fc2(x)
         return x
 
 # Model, loss function, optimizer
-# model_path = 'model_bounding.pth'
+model_path = 'D:/mywork/fish detect/final/model_bounding.pth'
 model = ImageClassifier().to(device)
-# model.load_state_dict(torch.load(model_path))
+model.load_state_dict(torch.load(model_path))
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.01, weight_decay=1e-4)
+optimizer = optim.Adam(model.parameters(), lr=0.0005, weight_decay=1e-4)
+# optimizer = optim.RMSprop(model.parameters(), lr=0.001, alpha=0.99, weight_decay=1e-4, centered=False)
+# optimizer = optim.Adagrad(model.parameters(), lr=0.001, weight_decay=1e-4)
+# optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)
+# optimizer = optim.SGD(model.parameters(), lr=0.005, momentum=0.9, weight_decay=1e-4, nesterov=True)
 scheduler = StepLR(optimizer, step_size=10, gamma=0.1)
 
 # Initialize weights
@@ -72,19 +78,24 @@ def remove_noise(binary_image):
     return cleaned_image
 
 # Function to extract ROI with padding
-def extract_roi_with_padding(image, padding=20):
+def extract_roi_with_padding(image):
+    padding = image.shape[0] // 100 * 5
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
-    binary = remove_noise(binary)
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if contours:
         largest_contour = max(contours, key=cv2.contourArea)
         x, y, w, h = cv2.boundingRect(largest_contour)
-        x = max(0, x - padding)
-        y = max(0, y - padding)
-        w = min(image.shape[1] - x, w + 2 * padding)
-        h = min(image.shape[0] - y, h + 2 * padding)
-        roi = image[y:y+h, x:x+w]
+
+        if w >= h:
+            size = w
+        else:
+            size = h
+
+        roi = np.zeros((size + padding * 2, size + padding * 2, 3), dtype=np.uint8)
+        x_offset = (roi.shape[1] - w) // 2
+        y_offset = (roi.shape[0] - h) // 2
+        roi[y_offset:y_offset+h, x_offset:x_offset+w] = image[y:y+h, x:x+w]
         return roi
     return image  # Return the original image if no contours are found
 
@@ -111,7 +122,7 @@ class CustomROIDataset(Dataset):
     def __getitem__(self, idx):
         img_name = self.image_files[idx]
         image = cv2.imread(img_name)
-        roi = extract_roi_with_padding(image, padding=20)
+        roi = extract_roi_with_padding(image)
         roi_pil = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
         label = self.labels[idx]
         if self.transform:
@@ -124,17 +135,17 @@ print(f"Training files: {sum([len(files) for r, d, files in os.walk(train_dir)])
 
 # Define data augmentation transformations
 data_augmentation_transforms = transforms.Compose([
-    transforms.Resize((128, 128)),
+    transforms.Resize((256, 256)),
     transforms.RandomHorizontalFlip(),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
 ])
 
 # Define validation transformations
 validation_transforms = transforms.Compose([
-    transforms.Resize((128, 128)),
+    transforms.Resize((256, 256)),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
 ])
 
 # Load the datasets with the custom dataset class
